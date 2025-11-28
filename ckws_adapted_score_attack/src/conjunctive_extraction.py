@@ -61,6 +61,11 @@ class ConjunctiveExtractor:
         # Column sums, since occurrence will be different each experiment
         self.occurrences = tf.gather(column_sums, self.original_keyword_indices)
 
+        """
+        keywords: ["the", "and", "is", ... ] 와 같이 빈도순으로 정렬된 tf.tensor
+        occurrences: [500, 400, 300, ...] 형태, keywords에 포함된 엔트리에 대응되는 빈도
+        """
+
         logger.info(f"Vocabulary size: {self.keywords.shape[0]}")
 
         # Reduce occurrence array size to match with keyword 'voc_size'
@@ -70,6 +75,11 @@ class ConjunctiveExtractor:
         _occ_array = tf.sparse.reorder(_occ_array)
         self.original_occ_array = tf.sparse.to_dense(_occ_array)
         # logger.debug(f"Original occ array: {self.original_occ_array[:10]}")
+
+        """
+        original_occ_array: 30109 * voc_size dense matrix
+        키워드의 occurrence가 높은 순으로 정렬
+        """
 
         if self.kw_conjunction_size > 1:
             # Make keyword combinations based on kw_conjunction_size

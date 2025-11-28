@@ -69,7 +69,7 @@ def attack_procedure(*args, **kwargs):
 
     deterministic_split = False
     memory_usage()
-    document_keyword_occurrence, sorted_keyword_voc, sorted_keyword_occ = extraction_procedure(prefix='.')
+    document_keyword_occurrence, sorted_keyword_voc, sorted_keyword_occ = extraction_procedure(prefix='')
     memory_usage()
     logger.debug(f"Split in 0.4 similar and 0.6 real")
 

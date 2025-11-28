@@ -1,9 +1,13 @@
-colorlog~=4.6.2
-pandas~=0.24.1
-nltk~=3.4.3
-numpy~=1.16.4
-scipy~=1.2.2
-tqdm~=4.32.1
+colorlog==6.9.0
+pandas==1.5.2
+nltk==3.9.1
+numpy==1.23.5
+scipy==1.9.1
+tqdm==4.67.1
+setuptools==80.9.0
 
-setuptools~=41.0.1
-tensorflow
+tensorflow==2.7.1
+
+# CUDA/GPU Support (installed via conda)
+# cudatoolkit==11.2.2
+# cudnn==8.9.7.29

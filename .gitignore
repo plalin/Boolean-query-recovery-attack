@@ -12,4 +12,16 @@ profiler/
 *.ipynb
 !notebooks/*
 *.log
-extract*
+extract*=1.20.3
+get-pip.py
+README.md
+readme.md
+apache_ml/
+maildir/
+extracted_kws_documents_dataset_float32-enron/
+extracted_kws_documents_dataset_float32-enron-occ/
+extracted_kws_documents_dataset_float32-enron-voc/
+*.csv
+*.log
+__pycache__/
+.ipynb_checkpoints/

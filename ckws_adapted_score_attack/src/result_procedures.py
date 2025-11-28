@@ -34,7 +34,7 @@ from ckws_adapted_score_attack.src.trapdoor_matchmaker import memory_usage
 MAX_CPUS = 64    # multiprocessing.cpu_count() if multiprocessing.cpu_count() <= 128 else 128
 
 logger = colorlog.getLogger("CKWS-Adapted-Refined-Score-Attack")
-NB_REP = 50
+NB_REP = 1
 kw_conjunction_size = 2
 start_time = time.time()
 
@@ -379,8 +379,8 @@ def load_mails_example():
 def base_results(result_file=f"{kw_conjunction_size}-kws_base_attack-{start_time}.csv"):
     with tf.device("/device:CPU:0"):
         # voc_size_possibilities = [200]
-        voc_size_possibilities = [500]
-        known_queries_possibilities = [60, 30]
+        voc_size_possibilities = [100]
+        known_queries_possibilities = [60]
         experiment_params = [
             (i, j)
             for i in voc_size_possibilities         # Voc size
@@ -402,6 +402,10 @@ def base_results(result_file=f"{kw_conjunction_size}-kws_base_attack-{start_time
             writer.writeheader()
 
             document_keyword_occurrence, sorted_keyword_voc, sorted_keyword_occ = load_preprocessed_enron_float32(prefix='')
+            """
+            document_keyword_occurrence: 30109 * 62976 matrix
+            entries: # of occurrences of each keyword in each document
+            """
 
             # Split to N sparse tensors: one sparse tensor per email
             emails = tf.sparse.split(
@@ -437,6 +441,11 @@ def base_results(result_file=f"{kw_conjunction_size}-kws_base_attack-{start_time
 
                 stored_docs = tf.sparse.concat(sp_inputs=[emails[i] for i in stored_doc_ids], axis=0)
                 logger.debug(f"Stored docs shape: {stored_docs.dense_shape}")
+
+                """
+                similar_docs: 30109*0.4 × 62976 matrix
+                stored_docs: 30109*0.6 × 62976 matrix
+                """
 
                 # Extract keywords from similar dataset
                 memory_usage()

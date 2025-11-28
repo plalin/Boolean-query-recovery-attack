@@ -112,17 +112,16 @@ class DatasetPreprocessor:
         extraction_procedure = DocumentSetExtraction[dataset]
 
         # Read all mails into memory
+        logger.info(f"Loading emails with prefix: {path_prefix}")
         df_frame = extraction_procedure(prefix=path_prefix)
+        logger.info(f"Loaded {len(df_frame)} emails")
+        
+        if len(df_frame) == 0:
+            raise ValueError(f"No emails loaded! Check if the path prefix '{path_prefix}' is correct and contains email data.")
 
-        with pool_context(processes=MAX_CPUS) as pool:
-            results = pool.starmap(
-                self.extract_email_voc, zip(
-                    range(MAX_CPUS),
-                    np.array_split(df_frame, MAX_CPUS),
-                    [one_occ_per_doc for _ in range(MAX_CPUS)],   # occurrence_per_doc
-                ),
-            )
-            self.freq_dict, self.glob_freq_dict = reduce(KeywordExtractor._merge_results, results)
+        # 단일 프로세스로 키워드 추출 (안전한 방법)
+        logger.info("Using single process for keyword extraction")
+        self.freq_dict, self.glob_freq_dict = self.extract_email_voc(0, df_frame, one_occ_per_doc)
 
         # Remove corpus from memory
         del df_frame
@@ -150,29 +149,62 @@ class DatasetPreprocessor:
 
     @staticmethod
     def build_sparse_occurrence_array(sorted_voc_with_occ: List, freq_dict: dict) -> tf.Tensor:
+        # 안전장치 추가
+        if not freq_dict:
+            raise ValueError("freq_dict is empty!")
+        
+        if len(freq_dict.values()) == 0:
+            raise ValueError("freq_dict.values() is empty!")
+        
+        logger.info(f"Building sparse occurrence array with {len(freq_dict)} documents and {len(sorted_voc_with_occ)} vocabulary words")
+        
         occ_list = []
 
-        with pool_context(processes=MAX_CPUS) as pool:
-            for row in tqdm.tqdm(
-                    pool.imap_unordered(OccRowComputerPreprocessor(sorted_voc_with_occ), freq_dict.values()),
-                    desc=f"Computing the occurrence array",
-                    total=len(freq_dict.values()),
-            ):
+        # 단일 프로세스로 처리
+        logger.info("Using single process for occurrence array computation")
+        for doc_idx, doc_words in enumerate(tqdm.tqdm(
+                freq_dict.values(),
+                desc="Computing the occurrence array (single process)",
+                total=len(freq_dict.values())
+        )):
+            row = OccRowComputerPreprocessor(sorted_voc_with_occ)(doc_words)
+            if row is not None:
                 occ_list.append(tf.sparse.transpose(tf.sparse.from_dense(tf.convert_to_tensor([row], dtype=tf.float32))))
 
+        if not occ_list:
+            raise ValueError("occ_list is empty after processing! Check if freq_dict contains valid data.")
+        
+        logger.info(f"Successfully processed {len(occ_list)} documents")
         return tf.sparse.transpose(tf.sparse.concat(axis=1, sp_inputs=occ_list))
 
     @staticmethod
     def build_occurrence_array(sorted_voc_with_occ: List, freq_dict: dict) -> tf.Tensor:
+        # 안전장치 추가
+        if not freq_dict:
+            raise ValueError("freq_dict is empty!")
+        
+        if len(freq_dict.values()) == 0:
+            raise ValueError("freq_dict.values() is empty!")
+        
+        logger.info(f"Building occurrence array with {len(freq_dict)} documents and {len(sorted_voc_with_occ)} vocabulary words")
+        
         occ_list = []
-        with pool_context(processes=MAX_CPUS) as pool:
-            for row in tqdm.tqdm(
-                    pool.imap_unordered(OccRowComputerPreprocessor(sorted_voc_with_occ), freq_dict.values()),
-                    desc=f"Computing the occurrence array",
-                    total=len(freq_dict.values()),
-            ):
+        
+        # 단일 프로세스로 처리
+        logger.info("Using single process for occurrence array computation")
+        for doc_idx, doc_words in enumerate(tqdm.tqdm(
+                freq_dict.values(),
+                desc="Computing the occurrence array (single process)",
+                total=len(freq_dict.values())
+        )):
+            row = OccRowComputerPreprocessor(sorted_voc_with_occ)(doc_words)
+            if row is not None:
                 occ_list.append(row)
 
+        if not occ_list:
+            raise ValueError("occ_list is empty after processing! Check if freq_dict contains valid data.")
+        
+        logger.info(f"Successfully processed {len(occ_list)} documents")
         return tf.convert_to_tensor(occ_list, dtype=tf.float32)
 
     def save_to_csv(self):
@@ -272,23 +304,38 @@ class DatasetPreprocessor:
 
     @staticmethod
     def extract_email_voc(ind, d_frame, one_occ_per_doc=True):
+        logger.info(f"Starting extract_email_voc with {len(d_frame)} documents")
+        
         freq_dict = {}
         glob_freq_list = {}
+        
+        processed_count = 0
         for row_tuple in tqdm.tqdm(
                 iterable=d_frame.itertuples(),
                 desc=f"Extracting corpus vocabulary (Core {ind})",
                 total=len(d_frame),
                 position=ind,
         ):
-            temp_freq_dist = KeywordExtractor.get_voc_from_one_email(
-                row_tuple.mail_body, freq=True
-            )
-            freq_dict[row_tuple.filename] = {}
-            for word, freq in temp_freq_dist.items():
-                freq_to_add = 1 if one_occ_per_doc else freq
-                freq_dict[row_tuple.filename][word] = freq_to_add
-                try:
-                    glob_freq_list[word] += freq_to_add
-                except KeyError:
-                    glob_freq_list[word] = freq_to_add
+            try:
+                temp_freq_dist = KeywordExtractor.get_voc_from_one_email(
+                    row_tuple.mail_body, freq=True
+                )
+                freq_dict[row_tuple.filename] = {}
+                for word, freq in temp_freq_dist.items():
+                    freq_to_add = 1 if one_occ_per_doc else freq
+                    freq_dict[row_tuple.filename][word] = freq_to_add
+                    try:
+                        glob_freq_list[word] += freq_to_add
+                    except KeyError:
+                        glob_freq_list[word] = freq_to_add
+                processed_count += 1
+                
+                if processed_count % 1000 == 0:
+                    logger.info(f"Processed {processed_count} documents, freq_dict size: {len(freq_dict)}")
+                    
+            except Exception as e:
+                logger.error(f"Error processing document {row_tuple.filename}: {e}")
+                continue
+        
+        logger.info(f"Completed extract_email_voc. Processed {processed_count} documents, freq_dict size: {len(freq_dict)}")
         return freq_dict, glob_freq_list

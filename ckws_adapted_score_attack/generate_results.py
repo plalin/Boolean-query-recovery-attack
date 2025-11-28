@@ -1,6 +1,13 @@
 """Script to reproduce all the results presented in the QueRyvolution paper.
 """
 import os
+import sys
+
+# PYTHONPATH에 프로젝트 루트 디렉토리 추가 (디버깅용)
+project_root = os.path.dirname(os.path.dirname(__file__))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
 import colorlog
 import logging
 import tensorflow as tf
@@ -37,6 +44,8 @@ from ckws_adapted_score_attack.src.result_procedures import (
     document_set_results,
     known_data,
 )
+from ckws_adapted_score_attack.src.boolean_naive_attack import boolean_naive_base_results
+
 
 logger = colorlog.getLogger("CKWS-Adapted-Refined-Score-Attack")
 
@@ -52,15 +61,16 @@ if __name__ == "__main__":
     file_handler.setFormatter(FORMATTER)
     logger.addHandler(file_handler)
 
-    procedures = (
+    procedures = [
         # load_mails_example,
-        base_results,
+        # base_results,
         # attack_comparison,
         # cluster_size_statistics,
         # understand_variance,
         # document_set_results,
         # known_data,
-    )
+        boolean_naive_base_results
+    ]
 
     # tf.debugging.set_log_device_placement(True)
     if PROFILER_ENABLED:

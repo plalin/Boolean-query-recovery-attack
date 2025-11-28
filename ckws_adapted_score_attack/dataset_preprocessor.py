@@ -41,7 +41,7 @@ if __name__ == '__main__':
     parser.add_argument(
         "--src-path-prefix",
         type=str,
-        default="../",
+        default="./",
         help="Path prefix for preprocessor to find raw dataset.",
     )
     parser.add_argument(
