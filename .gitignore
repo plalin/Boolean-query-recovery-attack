@@ -25,3 +25,4 @@ extracted_kws_documents_dataset_float32-enron-voc/
 *.log
 __pycache__/
 .ipynb_checkpoints/
+test_boolean_modules.py
