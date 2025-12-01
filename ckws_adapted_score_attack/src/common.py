@@ -269,6 +269,38 @@ def conjunctive_keyword_combinations_indices(num_keywords: int, kw_conjunction_s
     return a
 
 
+def boolean_keyword_combinations_indices(num_keywords: int, kw_conjunction_size: int = 2) -> np.ndarray:
+    """
+    Generate keyword combination indices for boolean queries (conjunctive + disjunctive).
+    
+    Returns indices array where:
+    - First half: conjunctive combinations (AND)
+    - Second half: disjunctive combinations (OR)
+    
+    Arguments:
+        num_keywords {int} -- Number of keywords in vocabulary
+        kw_conjunction_size {int} -- Size of keyword combinations (default: 2)
+    
+    Returns:
+        np.ndarray -- Array of shape (kw_conjunction_size, 2 * num_combinations)
+                     where num_combinations = C(num_keywords, kw_conjunction_size)
+    
+    Example:
+        For num_keywords=3, kw_conjunction_size=2:
+        Returns: [[0, 0, 1, 0, 0, 1],
+                  [1, 2, 2, 1, 2, 2]]
+        Meaning: (0&1), (0&2), (1&2), (0|1), (0|2), (1|2)
+    """
+    # Generate conjunctive combinations
+    conj_combinations = conjunctive_keyword_combinations_indices(num_keywords, kw_conjunction_size)
+    
+    # Disjunctive uses same index combinations (but different operations)
+    disj_combinations = conj_combinations.copy()
+    
+    # Concatenate: [conjunctive, disjunctive]
+    return np.concatenate([conj_combinations, disj_combinations], axis=1)
+
+
 def cartesian_product(*arrays):
     la = len(arrays)
     d_type = np.result_type(*arrays)

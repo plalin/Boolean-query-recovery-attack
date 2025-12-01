@@ -20,10 +20,11 @@ from scipy.special import comb
 import tensorflow as tf
 import time
 
-from ckws_adapted_score_attack.src.conjunctive_extraction import ConjunctiveExtractor, generate_trapdoors, generate_known_queries
-from ckws_adapted_score_attack.src.conjunctive_matchmaker import ConjunctiveScoreAttack
-from ckws_adapted_score_attack.src.conjunctive_query_generator import ConjunctiveQueryResultExtractor
-from ckws_adapted_score_attack.src.common import KeywordExtractor, conjunctive_keyword_combinations_indices
+from ckws_adapted_score_attack.src.conjunctive_extraction import generate_trapdoors, generate_known_queries
+from ckws_adapted_score_attack.src.boolean_extraction import BooleanExtractor
+from ckws_adapted_score_attack.src.boolean_matchmaker import BooleanScoreAttack
+from ckws_adapted_score_attack.src.boolean_query_generator import BooleanQueryResultExtractor
+from ckws_adapted_score_attack.src.common import KeywordExtractor, boolean_keyword_combinations_indices
 from ckws_adapted_score_attack.src.common import generate_known_queries as old_generate_known_queries
 from ckws_adapted_score_attack.src.email_extraction import (
     split_df,
@@ -49,7 +50,7 @@ start_time = time.time()
 def boolean_naive_base_results(result_file=f"{kw_conjunction_size}-kws_boolean_naive_base_attack-{start_time}.csv"):
     with tf.device("/device:CPU:0"):
         # voc_size_possibilities = [200]
-        voc_size_possibilities = [150]
+        voc_size_possibilities = [50, 75, 100, 125, 150]
         known_queries_possibilities = [60]
         experiment_params = [
             (i, j)
@@ -110,8 +111,8 @@ def boolean_naive_base_results(result_file=f"{kw_conjunction_size}-kws_boolean_n
                 memory_usage()
 
                 if i % modulus == 0:
-                    logger.debug(f"Generate keyword combinations: nCr({voc_size}, {kw_conjunction_size})")
-                    keyword_combinations = conjunctive_keyword_combinations_indices(
+                    logger.debug(f"Generate boolean keyword combinations: 2 * nCr({voc_size}, {kw_conjunction_size})")
+                    keyword_combinations = boolean_keyword_combinations_indices(
                         num_keywords=voc_size, kw_conjunction_size=kw_conjunction_size)
 
                 # Split similar and real dataset
@@ -134,53 +135,54 @@ def boolean_naive_base_results(result_file=f"{kw_conjunction_size}-kws_boolean_n
 
                 # Extract keywords from similar dataset
                 memory_usage()
-                similar_extractor = ConjunctiveExtractor(
+                similar_extractor = BooleanExtractor(
                     occurrence_array=similar_docs,
                     keyword_voc=sorted_keyword_voc,
                     keyword_occ=sorted_keyword_occ,
                     voc_size=voc_size,
                     kw_conjunction_size=kw_conjunction_size,
                     min_freq=1,
-                    precalculated_artificial_keyword_combinations_indices=keyword_combinations,
+                    precalculated_boolean_keyword_combinations_indices=keyword_combinations,
                     multi_core=True,
                 )
                 nb_similar_docs = similar_extractor.occ_array.shape[1]
                 memory_usage()
 
                 """
-                similar_extractor.occ_array: 각 문서에서 키워드의 조합이 발생한 횟수가 엔트리인 행렬 (conjunctive keyword combinations * nb_similar_docs)
-
-                occ_array = O라고 할 때, O^T * O 연산은 conjunctive_matchmaker.py에 포함됨
-
-                TODO: occ_array의 열에 해당하는 엔트리가 boolean (conjunctive + disjunctive) 가 되도록 수정
-                keyword_combinations를 boolean_combinations로 수정
+                similar_extractor.occ_array: 각 문서에서 키워드의 조합이 발생한 횟수가 엔트리인 행렬 
+                (boolean keyword combinations * nb_similar_docs)
+                boolean = [conjunctive (AND), disjunctive (OR)]
+                
+                occ_array = O라고 할 때, O^T * O 연산은 boolean_matchmaker.py에 포함됨
                 """
 
                 # Extract keywords from real dataset
-                real_extractor = ConjunctiveQueryResultExtractor(
-                    stored_docs,
-                    sorted_keyword_voc,
-                    sorted_keyword_occ,
-                    voc_size,
-                    kw_conjunction_size,
-                    1,
-                    keyword_combinations,
-                    True,
+                real_extractor = BooleanQueryResultExtractor(
+                    occurrence_array=stored_docs,
+                    keyword_voc=sorted_keyword_voc,
+                    keyword_occ=sorted_keyword_occ,
+                    voc_size=voc_size,
+                    kw_conjunction_size=kw_conjunction_size,
+                    min_freq=1,
+                    precalculated_boolean_keyword_combinations_indices=keyword_combinations,
+                    multi_core=True,
                 )
                 nb_server_docs = real_extractor.occ_array.shape[1]
                 memory_usage()
 
                 """
-                real_extractor.occ_array: ConjunctiveExtractor.occ_array와 동일한 형태의 행렬 (conjunctive keyword combinations * nb_server_docs)
+                real_extractor.occ_array: BooleanExtractor.occ_array와 동일한 형태의 행렬 
+                (boolean keyword combinations * nb_server_docs)
                 """ 
 
-                # Queries = 15% of artificial kws
-                queryset_size = int(comb(voc_size, kw_conjunction_size, exact=True) * 0.15)
+                # Queries = 15% of boolean kws (conjunctive + disjunctive = 2x)
+                queryset_size = int(comb(voc_size, kw_conjunction_size, exact=True) * 0.15 * 2)
 
                 query_array, query_voc = real_extractor.get_fake_queries(queryset_size)
 
                 """
-                query_voc = ["alice|bob", "email|meeting", "project|report", "time|schedule"] 와 같이 임의로 선정된 키워드 조합의 리스트
+                query_voc = ["alice&bob", "email&meeting", "alice|bob", "email|meeting"] 와 같이 임의로 선정된 boolean 키워드 조합의 리스트
+                (conjunctive with '&', disjunctive with '|')
 
                 query_array = [
                 [15,  0,  7,  0,  3],   # query 0 ("alice|bob")의 각 문서 발생 횟수
@@ -204,13 +206,13 @@ def boolean_naive_base_results(result_file=f"{kw_conjunction_size}-kws_boolean_n
                 memory_usage()
 
                 """
-                similar dataset과 stored dataset의 conjunctive keyword pool의 교집합에서
+                similar dataset과 stored dataset의 boolean keyword pool의 교집합에서
                 nb_known_queries개의 키워드를 랜덤으로 선정
 
                 known_queries = {
-                "alice|bob": "alice|bob",
+                "alice&bob": "alice&bob",
                 "email|meeting": "email|meeting",
-                ... (총 60개)
+                ... (총 60개, conjunctive + disjunctive 포함)
                 }
                 """
 
@@ -220,21 +222,21 @@ def boolean_naive_base_results(result_file=f"{kw_conjunction_size}-kws_boolean_n
                 )
 
                 """
-                td_voc: query_voc의 각 키워드를 해시한 리스트.
+                td_voc: query_voc의 각 boolean 키워드를 해시한 리스트.
                 
                 query_voc = [
-                "alice|bob",
-                "email|meeting",
-                "project|report",
-                "time|schedule",
+                "alice&bob",     # conjunctive
+                "email&meeting",  # conjunctive
+                "alice|bob",     # disjunctive
+                "email|meeting",  # disjunctive
                 ...
                 ]
 
                 td_voc = [
-                "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0",  # SHA1("alice|bob")
-                "b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1",  # SHA1("email|meeting")
-                "c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2",  # SHA1("project|report")
-                "d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3",  # SHA1("time|schedule")
+                "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0",  # SHA1("alice&bob")
+                "b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1",  # SHA1("email&meeting")
+                "c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2",  # SHA1("alice|bob")
+                "d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3",  # SHA1("email|meeting")
                 ...
                 ]
                 """
@@ -270,7 +272,7 @@ def boolean_naive_base_results(result_file=f"{kw_conjunction_size}-kws_boolean_n
                 # known_queries := Keys: Trapdoor tokens; Values: Keywords
                 memory_usage()
 
-                matchmaker = ConjunctiveScoreAttack(
+                matchmaker = BooleanScoreAttack(
                     keyword_occ_array=similar_extractor.occ_array,
                     keyword_sorted_voc=similar_extractor.get_sorted_voc().numpy(),
                     trapdoor_occ_array=query_array,

@@ -77,8 +77,10 @@ class ConjunctiveExtractor:
         # logger.debug(f"Original occ array: {self.original_occ_array[:10]}")
 
         """
-        original_occ_array: 30109 * voc_size dense matrix
+        original_occ_array: 30109 * voc_size dense matrix   (voc_size: single keyword)
         키워드의 occurrence가 높은 순으로 정렬
+
+        occ_array: 30109 * comb(voc_size, kw_conjunction_size) matrix
         """
 
         if self.kw_conjunction_size > 1:

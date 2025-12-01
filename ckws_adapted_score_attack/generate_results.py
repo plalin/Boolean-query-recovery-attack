@@ -63,7 +63,7 @@ if __name__ == "__main__":
 
     procedures = [
         # load_mails_example,
-        # base_results,
+        base_results,
         # attack_comparison,
         # cluster_size_statistics,
         # understand_variance,

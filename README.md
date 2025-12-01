@@ -9,5 +9,4 @@ The code is generally based on the implementation of CKWS-attack by Dijkslag et 
 
 The repo is currently undergoing modifications (25.11.4.).
 
-The code does not run in generic settings but only runs on certain python library/GPU driver versions.
-The current requirements.txt file does not contain the right versions.
+The experiment is run on certain python library/GPU driver versions (refer to requirements.txt).
