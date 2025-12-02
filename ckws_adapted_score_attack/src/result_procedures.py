@@ -857,6 +857,469 @@ def known_data(result_file=f"{kw_conjunction_size}-kws_known_data-{start_time}.c
                 memory_usage()
 
 
+def conj_vs_boolnaive_comparison(result_file=f"{kw_conjunction_size}-kws_conj_vs_boolnaive_comparison-{start_time}.csv"):
+    """Compare runtime and accuracy between conjunctive and boolean attacks."""
+    with tf.device("/device:CPU:0"):
+        voc_size_possibilities = [50, 75, 100, 125, 150]
+        known_queries_possibilities = [5, 10, 15, 30, 60]
+        experiment_params = [
+            (i, j)
+            for i in voc_size_possibilities
+            for j in known_queries_possibilities
+            for _k in range(NB_REP)
+        ]
+
+        with open(result_file, "w", newline="") as csv_file:
+            fieldnames = [
+                "Attack Type",
+                "Voc Size",
+                "Known Queries",
+                "Nb Combinations",
+                "Runtime (seconds)",
+                "Extractor Time (s)",
+                "Matchmaker Time (s)",
+                "Prediction Time (s)",
+                "Refinement Accuracy",
+            ]
+            writer = csv.DictWriter(csv_file, delimiter=";", fieldnames=fieldnames)
+            writer.writeheader()
+
+            document_keyword_occurrence, sorted_keyword_voc, sorted_keyword_occ = load_preprocessed_enron_float32(prefix='')
+
+            emails = tf.sparse.split(
+                sp_input=document_keyword_occurrence,
+                num_split=document_keyword_occurrence.dense_shape[0],
+                axis=0,
+            )
+
+            logger.debug(f"Number of emails: {len(emails)}")
+
+            for (exp_idx, (voc_size, nb_known_queries)) in enumerate(experiment_params):
+                logger.info(f"Experiment {exp_idx+1}/{len(experiment_params)}: voc_size={voc_size}, known_queries={nb_known_queries}")
+                
+                # Generate keyword combinations once
+                conj_combinations = conjunctive_keyword_combinations_indices(
+                    num_keywords=voc_size, kw_conjunction_size=kw_conjunction_size)
+                
+                from ckws_adapted_score_attack.src.common import boolean_keyword_combinations_indices
+                bool_combinations = boolean_keyword_combinations_indices(
+                    num_keywords=voc_size, kw_conjunction_size=kw_conjunction_size)
+
+                # Split dataset
+                email_ids = list(range(document_keyword_occurrence.dense_shape[0]))
+                random.shuffle(email_ids)
+                similar_doc_ids, stored_doc_ids = email_ids[:int(len(emails) * 0.4)], email_ids[int(len(emails) * 0.4):]
+                
+                similar_docs = tf.sparse.concat(sp_inputs=[emails[i] for i in similar_doc_ids], axis=0)
+                stored_docs = tf.sparse.concat(sp_inputs=[emails[i] for i in stored_doc_ids], axis=0)
+
+                # ===== CONJUNCTIVE ATTACK =====
+                logger.info("Testing CONJUNCTIVE attack")
+                start_total = time.time()
+                
+                start_extractor = time.time()
+                similar_extractor = ConjunctiveExtractor(
+                    occurrence_array=similar_docs,
+                    keyword_voc=sorted_keyword_voc,
+                    keyword_occ=sorted_keyword_occ,
+                    voc_size=voc_size,
+                    kw_conjunction_size=kw_conjunction_size,
+                    min_freq=1,
+                    precalculated_artificial_keyword_combinations_indices=conj_combinations,
+                    multi_core=True,
+                )
+                extractor_time = time.time() - start_extractor
+
+                real_extractor = ConjunctiveQueryResultExtractor(
+                    stored_docs,
+                    sorted_keyword_voc,
+                    sorted_keyword_occ,
+                    voc_size,
+                    kw_conjunction_size,
+                    1,
+                    conj_combinations,
+                    True,
+                )
+
+                queryset_size = int(comb(voc_size, kw_conjunction_size, exact=True) * 0.15)
+                query_array, query_voc = real_extractor.get_fake_queries(queryset_size)
+                del real_extractor
+
+                known_queries = generate_known_queries(
+                    similar_wordlist=similar_extractor.get_sorted_voc().numpy(),
+                    stored_wordlist=query_voc.numpy(),
+                    nb_queries=nb_known_queries,
+                )
+
+                td_voc, known_queries, eval_dict = generate_trapdoors(
+                    query_voc=query_voc.numpy(),
+                    known_queries=known_queries,
+                )
+
+                start_matchmaker = time.time()
+                matchmaker = ConjunctiveScoreAttack(
+                    keyword_occ_array=similar_extractor.occ_array,
+                    keyword_sorted_voc=similar_extractor.get_sorted_voc().numpy(),
+                    trapdoor_occ_array=query_array,
+                    trapdoor_sorted_voc=td_voc,
+                    known_queries=known_queries,
+                )
+                matchmaker_time = time.time() - start_matchmaker
+
+                td_list = list(set(eval_dict.keys()).difference(matchmaker.known_queries.keys()))
+                refinement_speed = int(0.05 * queryset_size)
+
+                start_prediction = time.time()
+                results = matchmaker.tf_predict_with_refinement(
+                    td_list,
+                    cluster_max_size=1,
+                    ref_speed=refinement_speed
+                )
+                prediction_time = time.time() - start_prediction
+                
+                total_time = time.time() - start_total
+                refinement_accuracy = np.mean([eval_dict[td] in candidates for td, candidates in results.items()])
+
+                writer.writerow({
+                    "Attack Type": "Conjunctive",
+                    "Voc Size": voc_size,
+                    "Known Queries": nb_known_queries,
+                    "Nb Combinations": int(comb(voc_size, kw_conjunction_size, exact=True)),
+                    "Runtime (seconds)": total_time,
+                    "Extractor Time (s)": extractor_time,
+                    "Matchmaker Time (s)": matchmaker_time,
+                    "Prediction Time (s)": prediction_time,
+                    "Refinement Accuracy": refinement_accuracy,
+                })
+
+                del similar_extractor
+                del matchmaker
+                gc.collect()
+
+                # ===== BOOLEAN ATTACK =====
+                logger.info("Testing BOOLEAN attack")
+                start_total = time.time()
+                
+                from ckws_adapted_score_attack.src.boolean_extraction import BooleanExtractor
+                from ckws_adapted_score_attack.src.boolean_query_generator import BooleanQueryResultExtractor
+                from ckws_adapted_score_attack.src.boolean_matchmaker import BooleanScoreAttack
+                
+                start_extractor = time.time()
+                similar_extractor = BooleanExtractor(
+                    occurrence_array=similar_docs,
+                    keyword_voc=sorted_keyword_voc,
+                    keyword_occ=sorted_keyword_occ,
+                    voc_size=voc_size,
+                    kw_conjunction_size=kw_conjunction_size,
+                    min_freq=1,
+                    precalculated_boolean_keyword_combinations_indices=bool_combinations,
+                    multi_core=True,
+                )
+                extractor_time = time.time() - start_extractor
+
+                real_extractor = BooleanQueryResultExtractor(
+                    stored_docs,
+                    sorted_keyword_voc,
+                    sorted_keyword_occ,
+                    voc_size,
+                    kw_conjunction_size,
+                    1,
+                    bool_combinations,
+                    True,
+                )
+
+                queryset_size = int(comb(voc_size, kw_conjunction_size, exact=True) * 0.15 * 2)
+                query_array, query_voc = real_extractor.get_fake_queries(queryset_size)
+                del real_extractor
+
+                known_queries = generate_known_queries(
+                    similar_wordlist=similar_extractor.get_sorted_voc().numpy(),
+                    stored_wordlist=query_voc.numpy(),
+                    nb_queries=nb_known_queries,
+                )
+
+                td_voc, known_queries, eval_dict = generate_trapdoors(
+                    query_voc=query_voc.numpy(),
+                    known_queries=known_queries,
+                )
+
+                start_matchmaker = time.time()
+                matchmaker = BooleanScoreAttack(
+                    keyword_occ_array=similar_extractor.occ_array,
+                    keyword_sorted_voc=similar_extractor.get_sorted_voc().numpy(),
+                    trapdoor_occ_array=query_array,
+                    trapdoor_sorted_voc=td_voc,
+                    known_queries=known_queries,
+                )
+                matchmaker_time = time.time() - start_matchmaker
+
+                td_list = list(set(eval_dict.keys()).difference(matchmaker.known_queries.keys()))
+                refinement_speed = int(0.05 * queryset_size)
+
+                start_prediction = time.time()
+                results = matchmaker.tf_predict_with_refinement(
+                    td_list,
+                    cluster_max_size=1,
+                    ref_speed=refinement_speed
+                )
+                prediction_time = time.time() - start_prediction
+                
+                total_time = time.time() - start_total
+                refinement_accuracy = np.mean([eval_dict[td] in candidates for td, candidates in results.items()])
+
+                writer.writerow({
+                    "Attack Type": "Boolean",
+                    "Voc Size": voc_size,
+                    "Known Queries": nb_known_queries,
+                    "Nb Combinations": int(comb(voc_size, kw_conjunction_size, exact=True) * 2),
+                    "Runtime (seconds)": total_time,
+                    "Extractor Time (s)": extractor_time,
+                    "Matchmaker Time (s)": matchmaker_time,
+                    "Prediction Time (s)": prediction_time,
+                    "Refinement Accuracy": refinement_accuracy,
+                })
+
+                del similar_extractor
+                del matchmaker
+                gc.collect()
+
+                csv_file.flush()
+                logger.info(f"Completed experiment {exp_idx+1}/{len(experiment_params)}")
+
+
+def conj_vs_boolnaive_comparison_cpu(result_file=f"{kw_conjunction_size}-kws_conj_vs_boolnaive_comparison_cpu-{start_time}.csv"):
+    """Compare runtime and accuracy between conjunctive and boolean attacks with CPU-forced Extractors."""
+    with tf.device("/device:CPU:0"):
+        voc_size_possibilities = [175, 200, 225, 250]
+        known_queries_possibilities = [60]
+        experiment_params = [
+            (i, j)
+            for i in voc_size_possibilities
+            for j in known_queries_possibilities
+            for _k in range(NB_REP)
+        ]
+
+        with open(result_file, "w", newline="") as csv_file:
+            fieldnames = [
+                "Attack Type",
+                "Voc Size",
+                "Known Queries",
+                "Nb Combinations",
+                "Runtime (seconds)",
+                "Extractor Time (s)",
+                "Matchmaker Time (s)",
+                "Prediction Time (s)",
+                "Refinement Accuracy",
+            ]
+            writer = csv.DictWriter(csv_file, delimiter=";", fieldnames=fieldnames)
+            writer.writeheader()
+
+            document_keyword_occurrence, sorted_keyword_voc, sorted_keyword_occ = load_preprocessed_enron_float32(prefix='')
+
+            emails = tf.sparse.split(
+                sp_input=document_keyword_occurrence,
+                num_split=document_keyword_occurrence.dense_shape[0],
+                axis=0,
+            )
+
+            logger.debug(f"Number of emails: {len(emails)}")
+
+            for (exp_idx, (voc_size, nb_known_queries)) in enumerate(experiment_params):
+                logger.info(f"Experiment {exp_idx+1}/{len(experiment_params)}: voc_size={voc_size}, known_queries={nb_known_queries}")
+                
+                # Generate keyword combinations once
+                conj_combinations = conjunctive_keyword_combinations_indices(
+                    num_keywords=voc_size, kw_conjunction_size=kw_conjunction_size)
+                
+                from ckws_adapted_score_attack.src.common import boolean_keyword_combinations_indices
+                bool_combinations = boolean_keyword_combinations_indices(
+                    num_keywords=voc_size, kw_conjunction_size=kw_conjunction_size)
+
+                # Split dataset
+                email_ids = list(range(document_keyword_occurrence.dense_shape[0]))
+                random.shuffle(email_ids)
+                similar_doc_ids, stored_doc_ids = email_ids[:int(len(emails) * 0.4)], email_ids[int(len(emails) * 0.4):]
+                
+                similar_docs = tf.sparse.concat(sp_inputs=[emails[i] for i in similar_doc_ids], axis=0)
+                stored_docs = tf.sparse.concat(sp_inputs=[emails[i] for i in stored_doc_ids], axis=0)
+
+                # ===== CONJUNCTIVE ATTACK (CPU FORCED) =====
+                logger.info("Testing CONJUNCTIVE attack (CPU forced)")
+                start_total = time.time()
+                
+                start_extractor = time.time()
+                # Force CPU execution for ConjunctiveExtractor
+                with tf.device("/device:CPU:0"):
+                    similar_extractor = ConjunctiveExtractor(
+                        occurrence_array=similar_docs,
+                        keyword_voc=sorted_keyword_voc,
+                        keyword_occ=sorted_keyword_occ,
+                        voc_size=voc_size,
+                        kw_conjunction_size=kw_conjunction_size,
+                        min_freq=1,
+                        precalculated_artificial_keyword_combinations_indices=conj_combinations,
+                        multi_core=True,
+                    )
+                extractor_time = time.time() - start_extractor
+
+                real_extractor = ConjunctiveQueryResultExtractor(
+                    stored_docs,
+                    sorted_keyword_voc,
+                    sorted_keyword_occ,
+                    voc_size,
+                    kw_conjunction_size,
+                    1,
+                    conj_combinations,
+                    True,
+                )
+
+                queryset_size = int(comb(voc_size, kw_conjunction_size, exact=True) * 0.15)
+                query_array, query_voc = real_extractor.get_fake_queries(queryset_size)
+                del real_extractor
+
+                known_queries = generate_known_queries(
+                    similar_wordlist=similar_extractor.get_sorted_voc().numpy(),
+                    stored_wordlist=query_voc.numpy(),
+                    nb_queries=nb_known_queries,
+                )
+
+                td_voc, known_queries, eval_dict = generate_trapdoors(
+                    query_voc=query_voc.numpy(),
+                    known_queries=known_queries,
+                )
+
+                start_matchmaker = time.time()
+                matchmaker = ConjunctiveScoreAttack(
+                    keyword_occ_array=similar_extractor.occ_array,
+                    keyword_sorted_voc=similar_extractor.get_sorted_voc().numpy(),
+                    trapdoor_occ_array=query_array,
+                    trapdoor_sorted_voc=td_voc,
+                    known_queries=known_queries,
+                )
+                matchmaker_time = time.time() - start_matchmaker
+
+                td_list = list(set(eval_dict.keys()).difference(matchmaker.known_queries.keys()))
+                refinement_speed = int(0.05 * queryset_size)
+
+                start_prediction = time.time()
+                results = matchmaker.tf_predict_with_refinement(
+                    td_list,
+                    cluster_max_size=1,
+                    ref_speed=refinement_speed
+                )
+                prediction_time = time.time() - start_prediction
+                
+                total_time = time.time() - start_total
+                refinement_accuracy = np.mean([eval_dict[td] in candidates for td, candidates in results.items()])
+
+                writer.writerow({
+                    "Attack Type": "Conjunctive",
+                    "Voc Size": voc_size,
+                    "Known Queries": nb_known_queries,
+                    "Nb Combinations": int(comb(voc_size, kw_conjunction_size, exact=True)),
+                    "Runtime (seconds)": total_time,
+                    "Extractor Time (s)": extractor_time,
+                    "Matchmaker Time (s)": matchmaker_time,
+                    "Prediction Time (s)": prediction_time,
+                    "Refinement Accuracy": refinement_accuracy,
+                })
+
+                del similar_extractor
+                del matchmaker
+                gc.collect()
+
+                # ===== BOOLEAN ATTACK (CPU FORCED - already in code) =====
+                logger.info("Testing BOOLEAN attack (CPU forced)")
+                start_total = time.time()
+                
+                from ckws_adapted_score_attack.src.boolean_extraction import BooleanExtractor
+                from ckws_adapted_score_attack.src.boolean_query_generator import BooleanQueryResultExtractor
+                from ckws_adapted_score_attack.src.boolean_matchmaker import BooleanScoreAttack
+                
+                start_extractor = time.time()
+                # BooleanExtractor already forces CPU internally
+                similar_extractor = BooleanExtractor(
+                    occurrence_array=similar_docs,
+                    keyword_voc=sorted_keyword_voc,
+                    keyword_occ=sorted_keyword_occ,
+                    voc_size=voc_size,
+                    kw_conjunction_size=kw_conjunction_size,
+                    min_freq=1,
+                    precalculated_boolean_keyword_combinations_indices=bool_combinations,
+                    multi_core=True,
+                )
+                extractor_time = time.time() - start_extractor
+
+                real_extractor = BooleanQueryResultExtractor(
+                    stored_docs,
+                    sorted_keyword_voc,
+                    sorted_keyword_occ,
+                    voc_size,
+                    kw_conjunction_size,
+                    1,
+                    bool_combinations,
+                    True,
+                )
+
+                queryset_size = int(comb(voc_size, kw_conjunction_size, exact=True) * 0.15 * 2)
+                query_array, query_voc = real_extractor.get_fake_queries(queryset_size)
+                del real_extractor
+
+                known_queries = generate_known_queries(
+                    similar_wordlist=similar_extractor.get_sorted_voc().numpy(),
+                    stored_wordlist=query_voc.numpy(),
+                    nb_queries=nb_known_queries,
+                )
+
+                td_voc, known_queries, eval_dict = generate_trapdoors(
+                    query_voc=query_voc.numpy(),
+                    known_queries=known_queries,
+                )
+
+                start_matchmaker = time.time()
+                matchmaker = BooleanScoreAttack(
+                    keyword_occ_array=similar_extractor.occ_array,
+                    keyword_sorted_voc=similar_extractor.get_sorted_voc().numpy(),
+                    trapdoor_occ_array=query_array,
+                    trapdoor_sorted_voc=td_voc,
+                    known_queries=known_queries,
+                )
+                matchmaker_time = time.time() - start_matchmaker
+
+                td_list = list(set(eval_dict.keys()).difference(matchmaker.known_queries.keys()))
+                refinement_speed = int(0.05 * queryset_size)
+
+                start_prediction = time.time()
+                results = matchmaker.tf_predict_with_refinement(
+                    td_list,
+                    cluster_max_size=1,
+                    ref_speed=refinement_speed
+                )
+                prediction_time = time.time() - start_prediction
+                
+                total_time = time.time() - start_total
+                refinement_accuracy = np.mean([eval_dict[td] in candidates for td, candidates in results.items()])
+
+                writer.writerow({
+                    "Attack Type": "Boolean",
+                    "Voc Size": voc_size,
+                    "Known Queries": nb_known_queries,
+                    "Nb Combinations": int(comb(voc_size, kw_conjunction_size, exact=True) * 2),
+                    "Runtime (seconds)": total_time,
+                    "Extractor Time (s)": extractor_time,
+                    "Matchmaker Time (s)": matchmaker_time,
+                    "Prediction Time (s)": prediction_time,
+                    "Refinement Accuracy": refinement_accuracy,
+                })
+
+                del similar_extractor
+                del matchmaker
+                gc.collect()
+
+                csv_file.flush()
+                logger.info(f"Completed experiment {exp_idx+1}/{len(experiment_params)}")
+
+
 def apache_reduced():
     ratio = 30109 / 50878
     apache_full = extract_apache_ml()

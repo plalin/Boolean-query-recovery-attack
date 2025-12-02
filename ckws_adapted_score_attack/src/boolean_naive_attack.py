@@ -50,7 +50,7 @@ start_time = time.time()
 def boolean_naive_base_results(result_file=f"{kw_conjunction_size}-kws_boolean_naive_base_attack-{start_time}.csv"):
     with tf.device("/device:CPU:0"):
         # voc_size_possibilities = [200]
-        voc_size_possibilities = [50, 75, 100, 125, 150]
+        voc_size_possibilities = [50]
         known_queries_possibilities = [60]
         experiment_params = [
             (i, j)

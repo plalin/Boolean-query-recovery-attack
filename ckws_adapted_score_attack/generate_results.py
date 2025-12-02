@@ -43,6 +43,8 @@ from ckws_adapted_score_attack.src.result_procedures import (
     attack_comparison,
     document_set_results,
     known_data,
+    conj_vs_boolnaive_comparison,
+    conj_vs_boolnaive_comparison_cpu,
 )
 from ckws_adapted_score_attack.src.boolean_naive_attack import boolean_naive_base_results
 
@@ -63,13 +65,15 @@ if __name__ == "__main__":
 
     procedures = [
         # load_mails_example,
-        base_results,
+        # base_results,
         # attack_comparison,
         # cluster_size_statistics,
         # understand_variance,
         # document_set_results,
         # known_data,
-        boolean_naive_base_results
+        # boolean_naive_base_results,
+        # conj_vs_boolnaive_comparison,  # Runtime and accuracy comparison
+        conj_vs_boolnaive_comparison_cpu,  # CPU-forced comparison for larger voc_sizes
     ]
 
     # tf.debugging.set_log_device_placement(True)

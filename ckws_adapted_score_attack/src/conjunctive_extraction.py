@@ -103,7 +103,9 @@ class ConjunctiveExtractor:
 
             # Rebuild occurrence array based on keyword combinations
             logger.info(f"Element wise matrix multiplication, kw_conjunction_size={self.kw_conjunction_size}")
+            logger.info("ConjunctiveExtractor: GPU execution enabled")
 
+            # Allow GPU execution (no device constraint)
             if multi_core:
                 # splits = tf.convert_to_tensor(_generate_splits_by_number_of_cpu(self.keyword_combinations.shape[0]))
                 logger.debug(f"self.keyword_combinations.shape: {self.keyword_combinations.shape}")
